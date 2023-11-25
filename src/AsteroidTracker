@@ -1,0 +1,85 @@
+import pandas as pd
+import plotly.express as px
+import requests
+
+#call the request endpoint and get the data
+data = requests.get('https://api.nasa.gov/neo/rest/v1/neo/browse?api_key=DEMO_KEY').json()
+#Now we have the JSON data, we can convert it to a dataframe
+
+def readData(data):
+    df = pd.json_normalize(data['near_earth_objects'])
+    print(df.columns)
+    print(df.dtypes)
+    print(df.head())
+    return df
+
+def cleanData(df):
+    df.dropna() #drop any NaN values
+    print(df['name_limited'].head())
+    print(df['absolute_magnitude_h'].head())
+    print(df['is_potentially_hazardous_asteroid'].head())
+    print(df['estimated_diameter.miles.estimated_diameter_max'].head())
+    print(df['estimated_diameter.miles.estimated_diameter_min'].head())
+    print(df['close_approach_data'][1])
+    df['Estimated Size'] = (df['estimated_diameter.miles.estimated_diameter_max'] + df['estimated_diameter.miles.estimated_diameter_min']) / 2
+    print(df['Estimated Size'].head())
+    return df
+
+def predictCloseApproach(df): #To get the NEXT non-existing close approach date - Not needed at the moment as we can use the closest approach date to our current date.
+    #predict the close approach of the asteroid
+    df['close_approach_data'] = df['close_approach_data'].apply(lambda x: [item['close_approach_date'] for item in x])
+    #convert the close approach date to a date time object
+    df['close_approach_data'] = df['close_approach_data'].apply(lambda x: [pd.to_datetime(item, format='%Y-%m-%d') for item in x])
+    #get the average gap between each date
+    df['average_gap'] = df['close_approach_data'].apply(lambda x: pd.Series(x).diff().mean().days if len(x) > 1 else None)
+    #now we have the average gap, we predict the next close approach date
+    df['predicted_close_dates'] = df.apply(lambda row: row['close_approach_data'][-1] + pd.Timedelta(days=row['average_gap']) if row['average_gap'] else pd.NaT, axis=1)
+    #get the final value of the predicted close dates
+    df['next_arrival_date'] = df['predicted_close_dates'].apply(lambda x: x[-1] if type(x) == pd.core.series.Series else x)
+    print('Next arrival dates:', df['next_arrival_date'].head())
+    pass
+
+#get the close approach date nearest to the current date
+def getCloseApproachDate(df):
+    #create a new column to store the close approach date
+    df['close_approach_data'] = df['close_approach_data'].apply(lambda x: [item['close_approach_date'] for item in x])
+    #convert the close approach date to a date time object
+    df['close_approach_data'] = df['close_approach_data'].apply(lambda x: [pd.to_datetime(item, format='%Y-%m-%d') for item in x])
+   #get the current date
+    current_date = pd.to_datetime('today')
+    #work out the arrival date closest to the current date to know when it's coming next
+    df['next_arrival_date'] = df['close_approach_data'].apply(lambda x: min((date for date in x if date > current_date), default=pd.NaT))
+    return df
+
+def groupData(cleanedDF):
+    cleanedDF = cleanedDF.groupby(['name_limited', 'is_potentially_hazardous_asteroid', 'Estimated Size', 'next_arrival_date']).first().reset_index()
+    #group by restricted name, potentially dangerous or not, size and when it's coming near Earth!
+    cleanedDF = cleanedDF.rename(columns={
+    'name_limited': 'Asteroid Name',
+    'is_potentially_hazardous_asteroid': 'Potentially Hazardous?',
+    'Estimated Size': 'Estimated Size (miles)',
+    'next_arrival_date': 'Next Arrival Date'
+})
+    return cleanedDF
+
+def plotData(groupedDF):
+    fig = px.scatter_3d(groupedDF,
+                        x='Estimated Size (miles)',
+                        y='Next Arrival Date',
+                        z='Potentially Hazardous?',
+                        color='Asteroid Name',
+                        size='Estimated Size (miles)',
+                        size_max=150,
+                        opacity=0.7,
+                        title='Asteroids coming near Earth')
+
+    fig.show()
+
+def main(data):
+    df = readData(data)
+    df = cleanData(df)
+    newDF = getCloseApproachDate(df)
+    groupedDF = groupData(newDF)
+    plotData(groupedDF)
+        
+main(data)
